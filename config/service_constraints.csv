@@ -1,0 +1,2 @@
+mode,line,service_group,min_frequency_per_15min,max_frequency_per_15min,target_frequency_per_15min,notes
+# Remove this comment and add verified values before optimization

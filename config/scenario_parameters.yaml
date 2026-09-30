@@ -1,0 +1,5 @@
+baseline_demand_multiplier: 1.0
+increased_demand_multiplier: 1.10
+high_demand_multiplier: 1.20
+fleet_multiplier: 1.0
+target_utilization: 0.80

@@ -1,0 +1,6 @@
+# Optional overrides. Keys are canonical fields used by the pipeline.
+# Values must match columns in the selected workbook sheet.
+# required fields for link models: line, from_station, to_station, link_load, link_frequency
+# Optional fields: time_period, day_type, direction, line_boarders, station_boarders, alighters
+sheet: null
+columns: {}
