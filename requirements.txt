@@ -1,11 +1,9 @@
+streamlit>=1.50
 pandas>=2.1
 numpy>=1.26
 openpyxl>=3.1
-pyarrow>=14
-pyyaml>=6.0
-networkx>=3.2
-plotly>=5.18
-streamlit>=1.32
-pyomo>=6.7
+pyomo>=6.9
 highspy>=1.7
+plotly>=5.18
+networkx>=3.2
 pytest>=8.0

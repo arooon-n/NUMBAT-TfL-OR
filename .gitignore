@@ -1,12 +1,25 @@
-.venv/
+# Python
 __pycache__/
-.pytest_cache/
 *.py[cod]
-.DS_Store
+.pytest_cache/
+
+# Virtual environment
+.venv/
+
+# Local Streamlit secrets (config.toml is tracked)
+.streamlit/secrets.toml
+
+# Data: the official workbook is downloaded by the user, never committed
 data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
-outputs/*
-!outputs/figures/.gitkeep
-!outputs/runs/.gitkeep
+
+# Generated outputs
+outputs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
