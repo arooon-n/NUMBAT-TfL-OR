@@ -11,6 +11,7 @@ F_t  link-service allocation budget for interval t (beta * sum_{i in t} f_i)
 from __future__ import annotations
 
 import math
+import threading
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -33,6 +34,10 @@ GOALS = {
 SOLVER_HELP = ("The HiGHS solver is not available to Pyomo. Install it with "
                "`python -m pip install highspy pyomo` (both are in requirements.txt) and restart the app.")
 TOL = 1e-6
+# Pyomo's HiGHS interface redirects the process-wide stdout/stderr during every solve. Streamlit runs each
+# rerun in its own thread, so overlapping solves (e.g. a widget changed mid-sensitivity run) deadlock Pyomo's
+# capture_output. Solves are therefore serialised: a new run waits for the previous solve to finish.
+_SOLVE_LOCK = threading.Lock()
 
 
 class SolverUnavailable(RuntimeError):
@@ -163,12 +168,13 @@ def _solve(model: pyo.ConcreteModel, s: Settings) -> dict:
         raise
     except Exception as exc:
         raise SolverUnavailable(f"{SOLVER_HELP} ({exc})") from exc
-    res = solver.solve(model, time_limit=s.time_limit, load_solutions=False,
-                       raise_exception_on_nonoptimal_result=False,
-                       solver_options={"mip_rel_gap": s.mip_gap})
-    has_solution = res.solution_status in (SolutionStatus.optimal, SolutionStatus.feasible)
-    if has_solution:
-        res.solution_loader.load_vars()
+    with _SOLVE_LOCK:
+        res = solver.solve(model, time_limit=s.time_limit, load_solutions=False,
+                           raise_exception_on_nonoptimal_result=False,
+                           solver_options={"mip_rel_gap": s.mip_gap})
+        has_solution = res.solution_status in (SolutionStatus.optimal, SolutionStatus.feasible)
+        if has_solution:
+            res.solution_loader.load_vars()
     optimal = res.termination_condition == TerminationCondition.convergenceCriteriaSatisfied
     gap = None
     if res.incumbent_objective is not None and res.objective_bound is not None:

@@ -165,7 +165,9 @@ def scenario_bars(table: pd.DataFrame, metric: str, label: str) -> go.Figure:
     ok = table["feasible"]
     fig = go.Figure(go.Bar(
         x=table["scenario"], y=table[metric].where(ok), marker_color=BLUE,
-        text=[f"{v:,.1f}" if pd.notna(v) else "infeasible" for v in table[metric].where(ok)],
-        textposition="outside", hovertemplate="%{x}<br>" + label + ": %{y:,.2f}<extra></extra>"))
+        text=[("infeasible" if pd.isna(v) else f"{v:,.0f}" if float(v) % 1 == 0 else f"{v:,.1f}")
+              for v in table[metric].where(ok)],
+        textposition="outside", hovertemplate="%{x}<br>" + label + (": %{y:,.2f}" if "pct" in metric else ": %{y:,.0f}")
+        + "<extra></extra>"))
     fig.update_layout(hovermode="closest")
     return _style(fig, f"{label} by scenario", 380)

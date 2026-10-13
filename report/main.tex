@@ -78,12 +78,11 @@ CB.SC.U4AIE23123}
 Coimbatore, India\\
 CB.SC.U4AIE23173}
 \and
-\IEEEauthorblockN{Dr. Shyam A V\IEEEauthorrefmark{1}}
+\IEEEauthorblockN{Dr. Shyam A V}
 \IEEEauthorblockA{\textit{Assistant Professor, School of AI}\\
 \textit{Amrita Vishwa Vidyapeetham}\\
 Coimbatore, India\\
-\IEEEauthorrefmark{1}Faculty Mentor}
-\thanks{Course project for 23MNG336 Operations Research.}
+Faculty Mentor}
 }
 
 \maketitle
@@ -97,7 +96,7 @@ Operations Research models: an integer program for the minimum train frequency t
 two-stage mixed-integer program that allocates a limited link-service budget to maximise demand served, and a
 weighted goal program that balances operating effort, demand satisfaction, adherence to the existing service pattern
 and a target capacity utilisation. The NUMBAT 2025 workbook yields \NObs{} link--interval observations
-(\NLinks{} links, \NLines{} lines, \NIntervals{} quarter-hours). A consistency check requested at the first review found
+(\NLinks{} links, \NLines{} lines, \NIntervals{} quarter-hours). A consistency check between the two link sheets finds
 \ZeroObs{} observations (\ZeroDemandPct\% of demand) where passengers are reported on a link with zero scheduled trains;
 these are flagged and handled by an explicit, user-selectable policy. With published rolling-stock capacities and an
 \Rho\% utilisation target, the minimum-frequency model needs \NetMOneReductionPct\% fewer link-train allocations than
@@ -131,24 +130,18 @@ consecutive stations and every 15-minute interval of a typical day, both the pas
 scheduled trains. Having demand and supply at the same resolution makes NUMBAT well suited to frequency and
 capacity optimisation.
 
-\textbf{Contributions.} This work
-\begin{enumerate}
-\item builds a schema-detecting parser and validation pipeline that turns the wide-format NUMBAT workbook into a
-      clean, key-matched link--interval table with a transparent data-quality report;
-\item formulates and solves three distinct Operations Research models (integer programming, mixed-integer
-      allocation and weighted goal programming) on the real data, with post-solve verification of every solution;
-\item explicitly diagnoses and handles observations where demand is reported without any scheduled train, the issue
-      raised at the first review (Section~\ref{sec:review});
-\item performs scenario and sensitivity analysis on demand, budget and utilisation targets; and
-\item delivers everything through an interactive dashboard that a non-programmer can use with an unmodified
-      workbook downloaded from TfL.
-\end{enumerate}
+In this work we first convert the wide-format NUMBAT workbook into a clean, validated table of link--interval
+observations, including a check for passengers reported on links with no scheduled train. On this data we formulate
+and solve three Operations Research models: an integer program for the minimum frequency, a mixed-integer program for
+allocating a limited service budget, and a weighted goal program that balances several planning goals. We then test
+how the solutions respond to demand growth, budget cuts and different utilisation targets, and deliver the whole
+workflow as an interactive dashboard that works directly on the workbook downloaded from TfL.
 
 The remainder of the paper is organised as follows. Section~\ref{sec:related} reviews related work,
 Section~\ref{sec:data} describes the dataset and Section~\ref{sec:questions} the research questions.
 Section~\ref{sec:method} presents the methodology and models, Section~\ref{sec:impl} the implementation and user
-interface, Section~\ref{sec:results} the results and Section~\ref{sec:review} the response to the first-review
-feedback. Section~\ref{sec:discussion} discusses limitations and Section~\ref{sec:conclusion} concludes.
+interface and Section~\ref{sec:results} the results. Section~\ref{sec:discussion} discusses limitations and
+Section~\ref{sec:conclusion} concludes.
 
 % ================================================================ II. RELATED WORK
 \section{Related Work}\label{sec:related}
@@ -179,22 +172,20 @@ average, file \texttt{NBT25TWT\_Outputs.xlsx}) from 05:00 to 04:59, assume a ful
 London Underground, London Overground, Docklands Light Railway (DLR), Elizabeth line and London Trams.
 
 \subsection{Workbook structure}
-The workbook contains nine worksheets (Table~\ref{tab:sheets}). Each data sheet is in \emph{wide} format: two title
-rows (hour and quarter-hour indices), a header row with the field names, then one row per link or station with a
-daily total, six time-of-day totals and 96 quarter-hour columns labelled \texttt{0500-0515} to \texttt{0445-0500}.
+The workbook contains nine worksheets; this work uses the two link sheets in Table~\ref{tab:sheets}. Each is in
+\emph{wide} format: two title rows (hour and quarter-hour indices), a header row with the field names, then one row
+per link with a daily total, six time-of-day totals and 96 quarter-hour columns labelled \texttt{0500-0515} to
+\texttt{0445-0500}.
 
 \begin{table}[!t]
-\caption{NUMBAT worksheets and their use in this work}\label{tab:sheets}
+\caption{NUMBAT worksheets used in this work}\label{tab:sheets}
 \centering\footnotesize
 \begin{tabularx}{\columnwidth}{@{}l r X@{}}
 \toprule
 Sheet & Rows & Content and use \\
 \midrule
-\texttt{Link\_Loads} & 1{,}214 & Passengers on each link per 15 min. \textbf{Demand $D_i$.} \\
-\texttt{Link\_Frequencies} & 1{,}214 & Trains on each link per 15 min (from the timetable). \textbf{Observed supply $f_i$.} \\
-\texttt{Line\_Boarders} & 21 & Boardings per line. Not used for optimisation. \\
-\texttt{Station\_*} (5 sheets) & 471--5{,}627 & Entries, exits, boarders, alighters, flows. Not substitutes for link loads. \\
-\texttt{\_Cover} & -- & Method and data-confidence notes, shown in the app. \\
+\texttt{Link\_Loads} & 1{,}214 & Passengers on each link per 15 min: demand $D_i$ \\
+\texttt{Link\_Frequencies} & 1{,}214 & Scheduled trains on each link per 15 min: observed supply $f_i$ \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -254,8 +245,8 @@ budget) is an explicit user input.
 NUMBAT downloads differ between years and day types, so nothing is read from fixed rows or columns. The parser
 (i)~finds the link sheets by name or by their title cell; (ii)~selects as header row the row that matches the most
 known field names (with aliases such as \emph{Dir}/\emph{Direction}); and (iii)~recognises interval columns by the
-pattern \texttt{HHMM-HHMM}, accepting only 15-minute spans. Intervals are ordered by
-$\big((\text{start} - 300) \bmod 1440\big)/15$, so the operating day runs from 05:00 across midnight to 04:59.
+pattern \texttt{HHMM-HHMM}, accepting only 15-minute spans. Intervals are ordered from 05:00 across midnight
+to 04:59, the NUMBAT operating day.
 Ambiguous header matches are reported rather than resolved silently.
 
 \subsection{Preprocessing and validation}\label{sec:prep}
@@ -359,60 +350,60 @@ where $\beta$ is a user-chosen fraction of the observed allocations in interval 
 a fleet count.
 
 \subsection{Notation}
-Index $i$ denotes one (link, interval) observation and $t$ an interval; $i \in t$ means observation $i$ belongs to
-interval $t$. $D_i$ is observed demand, $f_i$ observed trains, $C_i$ rated capacity and $\Ceff_i = \rho C_i$.
-Decision variables are $x_i \in \mathbb{Z}_{\ge 0}$ (train allocations) and $y_i \ge 0$ (passengers served).
+Index $i$ denotes one observation (a link in a 15-minute interval) and $t$ an interval; $i \in t$ means that
+observation $i$ lies in interval $t$. The data are the demand $D_i$ and observed trains $f_i$; the parameters are the
+capacity per train $C_i$, the target utilisation $\rho$ (so $\Ceff_i = \rho C_i$), the bounds $l_i, u_i$ and the
+budget $F_t$. The decision variables are the number of trains $x_i$ (integer) and the passengers served $y_i$.
 
 \subsection{Model 1: minimum train frequency (integer programming)}
 \begin{align}
-\min\ & \sum_i x_i \label{eq:m1obj}\\
-\text{s.t.}\ & \Ceff_i\, x_i \ge D_i && \forall i \label{eq:m1cap}\\
-& l_i \le x_i \le u_i,\ \ x_i \in \mathbb{Z}_{\ge 0} && \forall i \\
-& \textstyle\sum_{i \in t} x_i \le F_t && \forall t \quad \text{(optional)} \label{eq:m1bud}
+\min \quad & \sum_i x_i \label{eq:m1obj}\\
+\text{s.t.} \quad & \Ceff_i\, x_i \ge D_i && \forall i \label{eq:m1cap}\\
+& \sum_{i \in t} x_i \le F_t && \forall t \label{eq:m1bud}\\
+& l_i \le x_i \le u_i, \quad x_i \in \mathbb{Z}_{\ge 0} && \forall i
 \end{align}
-Without~\eqref{eq:m1bud} the problem separates and the optimum is $x_i^* = \max(l_i, \lceil D_i / \Ceff_i \rceil)$; the
-solver output is tested against this closed form. If a maximum frequency or the budget cannot cover demand, the model
+The budget constraint~\eqref{eq:m1bud} is optional. Without it, each observation can be solved separately and the
+optimum is $x_i = \max\left(l_i, \left\lceil D_i / \Ceff_i \right\rceil\right)$; the solver output is tested against
+this. If a maximum frequency or the budget cannot cover demand, the model
 is reported as infeasible and the conflicting links or intervals are listed. Constraints are never relaxed silently.
 
 \subsection{Model 2: capacity-constrained service allocation (MILP)}
 \begin{align}
-\max\ & \sum_i y_i \\
-\text{s.t.}\ & 0 \le y_i \le D_i && \forall i \\
+\max \quad & \sum_i y_i \\
+\text{s.t.} \quad & y_i \le D_i && \forall i \\
 & y_i \le \Ceff_i\, x_i && \forall i \\
-& \textstyle\sum_{i \in t} x_i \le F_t && \forall t \\
-& l_i \le x_i \le \bar u_i,\ \ x_i \in \mathbb{Z}_{\ge 0} && \forall i
+& \sum_{i \in t} x_i \le F_t && \forall t \\
+& l_i \le x_i \le u_i, \quad x_i \in \mathbb{Z}_{\ge 0}, \quad y_i \ge 0 && \forall i
 \end{align}
-with $\bar u_i = \min\!\big(u_i, \max(l_i, \lceil D_i/\Ceff_i\rceil)\big)$. The bound $\lceil D_i/\Ceff_i\rceil$ is a
-valid technical bound: more trains cannot serve more passengers. The
-objective does not penalise allocations, so several optima may contain trains that serve nobody. A lexicographic
-second stage~\cite{williams2013} therefore minimises $\sum_i x_i$ subject to $\sum_i y_i \ge (1-10^{-8})\,Y^*$, where
-$Y^*$ is the stage-1 optimum. An interval is reported as \emph{binding} when $\sum_{i\in t}x_i = F_t$ and demand in that interval is left unmet, i.e.\ the budget actually limits service.
+The objective does not penalise trains, so an optimum may contain trains that serve nobody. A second
+stage~\cite{williams2013} therefore minimises $\sum_i x_i$ while keeping $\sum_i y_i$ at its optimal value $Y^*$. An interval is reported as \emph{binding} when $\sum_{i\in t}x_i = F_t$ and demand in that interval is left unmet, i.e.\ the budget actually limits service.
 
 \subsection{Model 3: weighted goal programming}
-Model~3 uses rated capacity as the hard limit, $y_i \le \min(D_i, C_i x_i)$, and treats the utilisation target as a
-soft goal. Four goals are expressed with non-negative deviation variables $p, n$:
+Model~3 keeps the hard constraints $y_i \le D_i$, $y_i \le C_i x_i$ and $l_i \le x_i \le u_i$ (rated capacity is
+the physical limit) and expresses four planning goals in the standard goal-programming form, with non-negative
+deviation variables $n$ (under the target) and $p$ (over the target):
 \begin{align}
-\text{G1 (effort):}\ & \textstyle\sum_i x_i - E = p_1 - n_1 \\
-\text{G2 (demand):}\ & \text{unmet} = \textstyle\sum_i (D_i - y_i) \\
-\text{G3 (pattern):}\ & x_i - f_i = p_{3i} - n_{3i} && \forall i \\
-\text{G4 (utilisation):}\ & D_i - \rho C_i x_i = p_{4i} - n_{4i} && \forall i
+\text{G1 effort:} \quad & \sum_i x_i + n_1 - p_1 = E \\
+\text{G2 demand:} \quad & \sum_i y_i + n_2 = \sum_i D_i \\
+\text{G3 pattern:} \quad & x_i + n_{3i} - p_{3i} = f_i && \forall i \\
+\text{G4 utilisation:} \quad & \rho C_i x_i + n_{4i} - p_{4i} = D_i && \forall i
 \end{align}
-where $E = \sum_i \max(l_i, \lceil D_i/\Ceff_i\rceil)$ is the least effort that carries all demand at the target
-utilisation. With percentage normalisation~\cite{tamiz1998,jones2010}, each deviation is divided by its goal target:
+Here $E = \sum_i \max\left(l_i, \left\lceil D_i/\Ceff_i \right\rceil\right)$ is the fewest trains that carry all demand
+at the target utilisation, and the observed frequency $f_i$ is the target service pattern. Each unwanted deviation is
+divided by its target (percentage normalisation~\cite{tamiz1998,jones2010}), giving dimensionless goal values
 \begin{equation}
-\begin{split}
-\min\ & w_1\frac{p_1}{E} + w_2\frac{\text{unmet}}{\sum_i D_i} \\
-& + w_3\frac{\sum_i(p_{3i}+n_{3i})}{\sum_i f_i} + w_4\frac{\sum_i(p_{4i}+n_{4i})}{\sum_i D_i}.
-\end{split}
+\begin{gathered}
+z_1 = \frac{p_1}{E}, \qquad z_2 = \frac{n_2}{\sum_i D_i}, \\
+z_3 = \frac{\sum_i (n_{3i} + p_{3i})}{\sum_i f_i}, \qquad z_4 = \frac{\sum_i (n_{4i} + p_{4i})}{\sum_i D_i},
+\end{gathered}
 \end{equation}
-The weights $w_k$ start equal and are user settings. G2 and G4 are related but distinct: $p_{4i}$ counts load above
-the target $\rho C_i$, while unmet demand arises only above the rated capacity $C_i$. NUMBAT does not observe crowding
-directly, so G4 is derived from link loads and the capacity assumption.
-
-Two numerical safeguards are used. First, a weight of $10^{-3}$ on every goal breaks ties when a user sets a weight
-to zero, so solutions stay Pareto-efficient. Second, the objective is multiplied by a constant
-$\max(E, \sum f_i, \sum D_i)$. Without this scaling, cost coefficients near $10^{-8}$ were treated as zero by the HiGHS
-presolve, which then returned a meaningless ``optimal'' plan; the post-solve checks below detected this.
+and the model minimises their weighted sum
+\begin{equation}
+\min \quad \sum_{k=1}^{4} w_k z_k .
+\end{equation}
+The weights $w_k$ start equal and are user settings. In G4, $n_{4i}$ is load above the target $\rho C_i$ and
+$p_{4i}$ is unused target capacity; unmet demand (G2) arises only above the rated capacity $C_i$. A very small equal
+weight on every goal keeps solutions Pareto-efficient when a user sets a weight to zero.
 
 \subsection{Scenario and sensitivity analysis}
 Each model can be re-solved under: (A)~baseline; (B)~$D_i' = 1.10D_i$; (C)~$D_i' = 1.20D_i$; (D)~the allocation budget
@@ -592,8 +583,7 @@ Line & Observed & Required & Ratio & Peak obs. & Peak req. \\
 
 \textbf{Effect of the zero-train policy.} With the \emph{include} policy, Model~1 needs \NetMOneAllocInclude{}
 allocations, \NetZeroExtraAlloc{} more than under \emph{exclude}. These extra trains would run in quarter-hours where
-the timetable has none, to carry only \ZeroDemandPct\% of demand. This confirms that treating the inconsistent records
-uncritically would distort the recommendations, which was the concern raised at the review.
+the timetable has none, to carry only \ZeroDemandPct\% of demand. Treating the inconsistent records uncritically would therefore distort the recommendations.
 
 \subsection{Case study: the \CaseLine{} line}
 The \CaseLine{} line has \CaseLinks{} links (two directions) and \CaseObs{} eligible observations, carrying
@@ -712,7 +702,7 @@ The weight experiments show how each goal acts:
 \item \emph{Efficiency-led} weights give the same plan as equal weights (\MThreeEffAlloc{} allocations). G1 only
   penalises allocations \emph{above} $E$, and the equal-weight plan already lies below $E$ (so $z_1 = 0$). Raising $w_1$
   therefore has no further effect.
-\item The plan lies below $E$ because of G4. Under-used target capacity ($n_4$) is penalised, so in lightly loaded
+\item The plan lies below $E$ because of G4. Unused target capacity ($p_{4i}$) is penalised, so in lightly loaded
   intervals the model accepts a little unmet demand at rated capacity instead of running a train that would be mostly
   empty.
 \item \emph{Demand-led} weights restore service to \MThreeDemandSat\% served with \MThreeDemandAlloc{} allocations.
@@ -784,49 +774,6 @@ Scope & Model & Obs. & Time (s) & Status \\
 \end{tabular}
 \end{table}
 
-% ================================================================ VIII. REVIEW
-\section{Incorporation of First-Review Feedback}\label{sec:review}
-At the first review, the mentor questioned whether the dataset is internally consistent, since some links show zero
-trains in \texttt{Link\_Frequencies} while \texttt{Link\_Loads} reports passengers on the same link and interval, and
-asked that this be handled carefully. Table~\ref{tab:review} summarises how the feedback was addressed.
-
-\begin{table*}[!t]
-\caption{Response to the first-review feedback}\label{tab:review}
-\centering\footnotesize
-\begin{tabularx}{\textwidth}{@{}p{0.2\textwidth} X p{0.2\textwidth}@{}}
-\toprule
-Concern & Action taken & Evidence \\
-\midrule
-Passengers on links with zero scheduled trains &
-Every link--interval is checked for $D_i > 0$ with $f_i = 0$. Such observations are flagged, quantified by line and interval, and
-tested for trains in the adjacent interval (period-boundary effect). A user-visible policy excludes them by default
-and discloses the removed demand with every result; the include policy is available for comparison. &
-\ZeroObs{} obs., \ZeroDemandPct\% of demand, \ZeroAdjacentPct\% adjacent to service (Sec.~\ref{sec:zero}, Fig.~\ref{fig:zero}); Model 1 \NetZeroExtraAlloc{} fewer spurious trains \\
-\addlinespace
-General data correctness of the two sheets &
-Join on validated link keys and intervals rather than row order; cross-sheet comparison of line, direction, codes and
-station names; conflicting links excluded, label-only variants kept and reported; missing and invalid values never
-treated as zero; daily totals checked against interval sums. &
-\NAmbiguousLinks{} conflicting links excluded; \NLabelVariants{} label variants reported; Data Quality tab (Fig.~\ref{fig:ui2}) \\
-\addlinespace
-Assumptions not contained in the data &
-Capacity per train verified against TfL rolling-stock data sheets and made editable; the ``fleet'' of the review-1
-plan replaced by a clearly labelled link-service allocation budget, since NUMBAT gives link frequencies, not vehicles. &
-Table~\ref{tab:capacity}; Sec.~\ref{sec:params} \\
-\addlinespace
-Trustworthy optimisation output &
-Solver status checked, optimality claimed only when proven, independent post-solve checks, infeasibility reported
-with its cause. &
-Sec.~\ref{sec:method}, validation checks in the app \\
-\bottomrule
-\end{tabularx}
-\end{table*}
-
-Relative to the review-1 plan, the implemented system also (i)~uses link loads, not line boarders, as the demand
-of all three models, so that demand and supply are measured on the same links; (ii)~implements the five planned
-scenarios; and (iii)~provides all five planned dashboard functions (load, explore, select model, configure,
-view results) together with downloads.
-
 % ================================================================ IX. DISCUSSION
 \section{Discussion and Limitations}\label{sec:discussion}
 \textbf{Interpretation.} Across the network, the capacity needed to carry the observed volume at an \Rho\% target is well
@@ -858,17 +805,13 @@ time as an explicit objective, and day-type comparison (Friday, weekend) are nat
 \section{Conclusion}\label{sec:conclusion}
 This project built an end-to-end, data-driven decision-support system for metro train frequency and capacity planning
 on Transport for London's NUMBAT data. A schema-detecting parser and a strict validation pipeline turn the published
-workbook into a clean link--interval dataset. The pipeline discloses every exclusion, including the zero-train
-inconsistency identified at the first review. Three models answer complementary questions: Model~1 gives the minimum
+workbook into a clean link--interval dataset. The pipeline discloses every exclusion, including link--intervals that report
+passengers without a scheduled train. Three models answer complementary questions: Model~1 gives the minimum
 frequency to carry demand, Model~2 the best use of a limited service budget, and Model~3 a weighted compromise between
 effort, demand, service pattern and utilisation. Scenario analysis shows how these answers respond to demand growth,
 budget cuts and utilisation targets. The results show that observed peak crowding is localised to identifiable links
 and intervals, and that most of the remaining gap between demand-driven and timetabled service reflects headway
 policy. The interactive dashboard makes these trade-offs transparent and reproducible for planners and students alike.
-
-\section*{Acknowledgment}
-The authors thank Dr.\ Shyam A V, School of AI, Amrita Vishwa Vidyapeetham, for his guidance and for the feedback that
-led to the data-consistency analysis in Section~\ref{sec:zero}, and Transport for London for publishing the NUMBAT data.
 
 % ================================================================ REFERENCES
 \begin{thebibliography}{99}

@@ -61,8 +61,19 @@ def fmt(v, digits=0, suffix=""):
     return f"{v:,.{digits}f}{suffix}"
 
 
+def whole(df: pd.DataFrame) -> pd.DataFrame:
+    """Display float columns that hold only whole numbers (passengers, trains) as integers, not 84.0.
+    Columns with gaps become pandas' nullable Int64 for display only; computations keep the float data."""
+    out = df.copy()
+    for c in out.columns:
+        v = out[c]
+        if pd.api.types.is_float_dtype(v) and v.notna().any() and (v.dropna() % 1 == 0).all():
+            out[c] = v.astype("Int64")
+    return out
+
+
 def csv_bytes(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8")
+    return whole(df).to_csv(index=False).encode("utf-8")
 
 
 # ------------------------------------------------------------------ sidebar: upload
@@ -228,7 +239,7 @@ with tabs[1]:
     left, right = st.columns(2)
     with left:
         st.markdown("**Link sheet profile**")
-        sm = proc.sheet_metrics.set_index("sheet").T
+        sm = whole(proc.sheet_metrics.set_index("sheet").T.apply(pd.to_numeric, errors="coerce"))
         st.dataframe(sm, width="stretch")
         st.markdown("**Join and coverage**")
         n = mt["observations"]
@@ -270,12 +281,12 @@ with tabs[1]:
         zt = data[data["zero_train_demand"]]
         c_a, c_b = st.columns(2)
         with c_a:
-            st.dataframe(zt.groupby("line").agg(link_intervals=("demand", "size"), passengers=("demand", "sum"),
-                                                largest=("demand", "max")).sort_values("passengers", ascending=False),
+            st.dataframe(whole(zt.groupby("line").agg(link_intervals=("demand", "size"), passengers=("demand", "sum"),
+                                                      largest=("demand", "max")).sort_values("passengers", ascending=False)),
                          width="stretch")
         with c_b:
-            st.dataframe(zt.groupby("interval").agg(link_intervals=("demand", "size"), passengers=("demand", "sum"))
-                         .sort_values("passengers", ascending=False).head(12), width="stretch")
+            st.dataframe(whole(zt.groupby("interval").agg(link_intervals=("demand", "size"), passengers=("demand", "sum"))
+                               .sort_values("passengers", ascending=False).head(12)), width="stretch")
         st.caption("A train cannot carry passengers in an interval where none is scheduled, so these records are "
                    "inconsistent across the two sheets. They concentrate at the start and end of the traffic day and "
                    "usually sit next to an interval with trains, which suggests period-boundary assignment in NUMBAT. "
@@ -289,7 +300,7 @@ with tabs[1]:
     st.markdown("**Processed link-interval data (preview)**")
     preview_cols = ["link_id", "line", "direction", "from_station", "to_station", "interval", "demand",
                     "frequency", "demand_status", "frequency_status", "eligible_service"]
-    st.dataframe(data[[c for c in preview_cols if c in data]].head(200), hide_index=True, width="stretch")
+    st.dataframe(whole(data[[c for c in preview_cols if c in data]].head(200)), hide_index=True, width="stretch")
     st.download_button("Download processed link-interval data (CSV)",
                        csv_bytes(data.drop(columns=["link_key"], errors="ignore")),
                        file_name="numbat_link_interval_processed.csv", mime="text/csv")
@@ -339,11 +350,13 @@ with tabs[2]:
             with c1:
                 st.markdown(f"**Potential mismatches:** {len(over):,} link-intervals where demand exceeds "
                             f"observed effective capacity (C × ρ = {rho:.0%} of rated)")
-                st.dataframe(over.head(50), hide_index=True, width="stretch")
+                st.dataframe(whole(over.head(50)), hide_index=True, width="stretch",
+                             column_config={"load_factor": st.column_config.NumberColumn(format="%.3f")})
             with c2:
                 st.markdown(f"**Potentially under-used service:** {len(under):,} link-intervals with trains "
                             "running below 15% of rated capacity")
-                st.dataframe(under.head(50), hide_index=True, width="stretch")
+                st.dataframe(whole(under.head(50)), hide_index=True, width="stretch",
+                             column_config={"load_factor": st.column_config.NumberColumn(format="%.3f")})
             st.caption("Derived metrics: they depend on your capacity and utilisation assumptions, not on TfL data. "
                        "Link-intervals with passengers but no scheduled train are data inconsistencies, not capacity "
                        "mismatches; they appear at zero capacity in the chart and are analysed in the Data Quality tab.")
@@ -525,7 +538,7 @@ with tabs[3]:
 
             if not res.budget.empty:
                 with st.expander(f"Allocation budget by interval ({k.get('binding_intervals', 0)} binding)"):
-                    st.dataframe(res.budget, hide_index=True, width="stretch")
+                    st.dataframe(whole(res.budget), hide_index=True, width="stretch")
             if not res.goals.empty:
                 st.markdown("**Goal deviations** (0 = goal fully met; lower is better)")
                 st.dataframe(res.goals, hide_index=True, width="stretch",
@@ -541,7 +554,12 @@ with tabs[3]:
                                      ["total_optimized_allocations", "total_existing_allocations", "demand_served",
                                       "satisfaction_pct", "unmet_demand", "avg_utilization_pct", "links_with_shortfall"]}}
                                      for m, r in sorted({**others, res.model: res}.items())])
-                st.dataframe(comp, hide_index=True, width="stretch")
+                st.dataframe(comp, hide_index=True, width="stretch",
+                             column_config={"satisfaction_pct": st.column_config.NumberColumn(format="%.2f"),
+                                            "avg_utilization_pct": st.column_config.NumberColumn(format="%.1f"),
+                                            **{c: st.column_config.NumberColumn(format="%d") for c in
+                                               ["total_optimized_allocations", "total_existing_allocations",
+                                                "demand_served", "unmet_demand", "links_with_shortfall"]}})
                 st.caption("Comparable only where the assumptions shown above match; each model answers a different question.")
 
             with st.expander("Solution validation checks"):
@@ -550,7 +568,7 @@ with tabs[3]:
 
             st.markdown("**Detailed results**")
             show = res.table.drop(columns=["interval_order", "link_label"])
-            st.dataframe(show.head(1000), hide_index=True, width="stretch")
+            st.dataframe(whole(show.head(1000)), hide_index=True, width="stretch")
             st.caption("Observed: demand, existing_frequency. User assumptions: capacity, ρ. Derived: offered capacity, "
                        "utilisation, shortfalls. Recommendations: optimized_frequency, demand_served. "
                        "existing_* columns evaluate the observed timetable under the same assumptions.")
@@ -587,7 +605,10 @@ with tabs[4]:
         st.markdown(f"**{sc['model']}** · scope: {sc['scope']}")
         st.dataframe(sc["table"], hide_index=True, width="stretch",
                      column_config={"satisfaction_pct": st.column_config.NumberColumn(format="%.2f"),
-                                    "avg_utilization_pct": st.column_config.NumberColumn(format="%.1f")})
+                                    "avg_utilization_pct": st.column_config.NumberColumn(format="%.1f"),
+                                    **{c: st.column_config.NumberColumn(format="%d") for c in
+                                       ["total_allocations", "observed_allocations", "total_demand", "demand_served",
+                                        "unmet_demand", "under_capacity_links"]}})
         metric_labels = {"total_allocations": "Total train allocations", "satisfaction_pct": "Demand satisfaction (%)",
                          "unmet_demand": "Unmet demand", "avg_utilization_pct": "Utilisation of rated capacity (%)",
                          "under_capacity_links": "Links with a capacity shortfall"}

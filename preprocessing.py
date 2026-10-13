@@ -194,6 +194,13 @@ def preprocess(wb: Workbook) -> Processed:
     merged["eligible_service"] = merged["eligible_demand"] & merged["frequency_status"].eq("valid")
     merged.loc[merged["demand_status"] != "valid", "demand"] = np.nan
     merged.loc[merged["frequency_status"] != "valid", "frequency"] = np.nan
+    # Passengers are whole people. NUMBAT link loads are modelled estimates with fractional values, so demand is
+    # rounded once here to the nearest whole passenger (halves up); every tab and model uses the rounded value.
+    fractional = int((merged["demand"].notna() & (merged["demand"] % 1 != 0)).sum())
+    merged["demand"] = np.floor(merged["demand"] + 0.5 + 1e-9)
+    if fractional:
+        actions.append(f"Rounded {fractional:,} fractional demand value(s) (NUMBAT modelled estimates) "
+                       "to the nearest whole passenger.")
 
     merged["interval_order"] = merged["interval"].map(interval_order)
     merged["interval_start"] = merged["interval"].map(interval_start_text)
@@ -254,6 +261,8 @@ def preprocess(wb: Workbook) -> Processed:
         n_bad = int((gap > tol).sum())
         actions.append("Checked daily 'Total' against the sum of 15-minute values: "
                        + ("consistent for every link." if n_bad == 0 else f"{n_bad} link(s) differ (interval values are used for optimisation)."))
+    for c in wb.loads.period_columns + (["total"] if "total" in summary else []):
+        summary[c] = np.floor(summary[c] + 0.5 + 1e-9)  # whole passengers, as for the interval demand
 
     excluded = merged[~merged["eligible_demand"]]
     exclusions = (excluded.groupby(["demand_status"], dropna=False).size().rename("observations").reset_index()
