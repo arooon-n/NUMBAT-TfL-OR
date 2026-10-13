@@ -10,7 +10,7 @@ __pycache__/
 .streamlit/secrets.toml
 
 # Data: the official workbook is downloaded by the user, never committed
-data/raw/*
+
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
