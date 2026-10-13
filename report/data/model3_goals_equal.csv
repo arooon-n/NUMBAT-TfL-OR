@@ -1,0 +1,5 @@
+goal,weight,normalised deviation - observed service,normalised deviation - optimised plan,weighted contribution (optimised)
+Operational efficiency (fewer train allocations),1,2.2141,0.0,0.0
+Demand satisfaction (less unmet demand),1,0.0,0.0107,0.0107
+Service pattern (stay close to observed frequency),1,0.0,0.7434,0.7434
+Target utilisation (load close to rho x capacity),1,3.3072,0.1845,0.1845

@@ -210,6 +210,25 @@ def preprocess(wb: Workbook) -> Processed:
     if non_int.any():
         warnings.append(f"{int(non_int.sum())} frequency value(s) are not whole trains; they are kept as observed averages.")
 
+    # Passengers on a link in an interval with no scheduled train: internally inconsistent observations.
+    # Flag them (the optimisation policy is the user's choice) and record whether the same link has
+    # trains in the previous or next interval, which points to a period-boundary effect.
+    merged["zero_train_demand"] = merged["eligible_service"] & (merged["frequency"] == 0) & (merged["demand"] > 0)
+    grp = merged.groupby("link_key")
+    adjacent = pd.Series(False, index=merged.index)
+    for step in (1, -1):
+        same_link_next = grp["interval_order"].shift(-step) == merged["interval_order"] + step
+        adjacent |= same_link_next & (grp["frequency"].shift(-step) > 0)
+    merged["zero_train_adjacent_service"] = merged["zero_train_demand"] & adjacent
+    zt = merged[merged["zero_train_demand"]]
+    total_valid = merged.loc[merged["eligible_service"], "demand"].sum()
+    if len(zt):
+        warnings.append(
+            f"{len(zt):,} link-interval(s) report passengers but 0 scheduled trains "
+            f"({zt['demand'].sum():,.0f} passengers, {100 * zt['demand'].sum() / max(total_valid, 1):.2f}% of demand). "
+            f"For {100 * zt.loc[zt['zero_train_adjacent_service'], 'demand'].sum() / zt['demand'].sum():.0f}% of that demand "
+            "the same link has trains in an adjacent interval. Choose how the models treat them in the sidebar.")
+
     # Interval coverage across the two sheets.
     l_int = set(wb.loads.interval_columns.values())
     f_int = set(wb.frequencies.interval_columns.values()) if wb.frequencies else set()
@@ -268,6 +287,10 @@ def preprocess(wb: Workbook) -> Processed:
         "missing_demand": int((merged["demand_status"] == "missing").sum()),
         "missing_frequency": int((merged["frequency_status"] == "missing").sum()),
         "pct_eligible_service": 100.0 * merged["eligible_service"].sum() / n if n else 0.0,
+        "zero_train_obs": int(len(zt)),
+        "zero_train_demand": float(zt["demand"].sum()),
+        "zero_train_demand_pct": 100.0 * zt["demand"].sum() / total_valid if total_valid else 0.0,
+        "zero_train_adjacent_pct": 100.0 * zt.loc[zt["zero_train_adjacent_service"], "demand"].sum() / zt["demand"].sum() if len(zt) else 0.0,
     }
     return Processed(merged, summary, key, intervals, metrics, pd.DataFrame(sheet_stats), actions, warnings, exclusions)
 

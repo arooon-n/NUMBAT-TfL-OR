@@ -38,16 +38,19 @@ def with_observed_capacity(scope: pd.DataFrame, capacity: dict, rho: float) -> p
     obs = scope[scope["eligible_service"]].copy()
     obs["C"] = obs["line"].map(capacity)
     obs = obs[obs["C"] > 0]
-    obs["offered"] = obs["frequency"] * obs["C"] * rho
+    obs["offered"] = obs["frequency"] * np.floor(obs["C"] * rho + 1e-9)  # whole passengers, as in the models
     with np.errstate(divide="ignore", invalid="ignore"):
         obs["load_factor"] = np.where(obs["frequency"] > 0, obs["demand"] / (obs["frequency"] * obs["C"]), np.nan)
     return obs
 
 
 def mismatch_tables(obs: pd.DataFrame, rho: float, low: float = 0.15) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Over-capacity link-intervals (demand > observed effective capacity) and under-used ones (load < `low`)."""
+    """Over-capacity link-intervals (demand > observed effective capacity) and under-used ones (load < `low`).
+    Link-intervals with passengers but no scheduled train are not capacity mismatches but data inconsistencies;
+    they are reported separately in the Data Quality tab."""
     cols = ["line", "link_label", "interval", "demand", "frequency", "offered", "load_factor"]
-    over = obs[obs["demand"] > obs["offered"]].assign(excess=lambda d: d["demand"] - d["offered"])
+    served = obs[obs["frequency"] > 0]
+    over = served[served["demand"] > served["offered"]].assign(excess=lambda d: d["demand"] - d["offered"])
     over = over.sort_values("excess", ascending=False)[cols + ["excess"]]
     under = obs[(obs["frequency"] > 0) & (obs["load_factor"] < low)].sort_values("load_factor")[cols]
     return over, under
@@ -82,7 +85,8 @@ def interpret(res: Result) -> list[str]:
         if add.iloc[0] > 0:
             lines.append(f"Largest increase: {add.index[0]} ({add.iloc[0]:+,.0f} allocations over the scope).")
     if "binding_intervals" in k:
-        lines.append(f"The allocation budget is binding in {k['binding_intervals']} of {len(res.budget)} intervals.")
+        lines.append(f"The allocation budget limits service (exhausted with demand left unmet) in "
+                     f"{k['binding_intervals']} of {len(res.budget)} intervals.")
     if res.settings and res.settings.min_frequency == 0 and k.get("allocation_change", 0) < 0:
         lines.append("Note: with a minimum frequency of 0, the models size service to passenger volume only; "
                      "they do not include waiting-time or headway standards, which is why observed service is higher.")

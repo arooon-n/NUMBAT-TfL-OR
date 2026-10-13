@@ -1,0 +1,11 @@
+line,from_station,to_station,demand,peak_demand
+Elizabeth Line,Farringdon,Liverpool Street LU,193615.0,6455.0
+Elizabeth Line,Liverpool Street LU,Farringdon,190408.0,6299.0
+Elizabeth Line,Whitechapel,Liverpool Street LU,189671.0,7345.0
+Elizabeth Line,Liverpool Street LU,Whitechapel,187767.0,7229.0
+Elizabeth Line,Tottenham Court Road,Farringdon,184833.0,5529.0
+Elizabeth Line,Farringdon,Tottenham Court Road,184010.0,5426.0
+Victoria,Oxford Circus,Warren Street,160324.0,5447.0
+Victoria,Victoria LU,Green Park,159607.0,5151.0
+Victoria,Green Park,Oxford Circus,159562.0,4574.0
+Elizabeth Line,Tottenham Court Road,Bond Street,159290.0,4991.0

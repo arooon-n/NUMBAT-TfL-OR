@@ -23,3 +23,11 @@ outputs/
 Thumbs.db
 .idea/
 .vscode/
+
+# LaTeX build files (report/main.pdf is kept)
+report/*.aux
+report/*.log
+report/*.out
+report/*.synctex.gz
+report/*.fls
+report/*.fdb_latexmk

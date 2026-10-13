@@ -1,0 +1,20 @@
+line,observed,required,peak_req,peak_obs,ratio
+LO Liberty,128.0,128,1,1.0,1.0
+LO Suffragette,1692.0,1672,2,2.0,0.988
+LO Weaver,3612.0,3561,3,2.0,0.986
+LO Lioness,2664.0,2610,1,2.0,0.98
+Elizabeth Line,13124.0,7834,7,6.0,0.597
+LO Mildmay,7040.0,3978,2,4.0,0.565
+H\&C and Circle,14966.0,7810,3,4.0,0.522
+LO Windrush,9070.0,4517,4,5.0,0.498
+Metropolitan,12558.0,5334,3,6.0,0.425
+DLR,18989.0,7801,3,8.0,0.411
+District,29530.0,11782,5,7.0,0.399
+Bakerloo,11522.0,4389,3,6.0,0.381
+Central,26945.0,10159,6,9.0,0.377
+Piccadilly,28435.0,10415,4,7.0,0.366
+Northern,38919.0,13966,8,8.0,0.359
+Waterloo \& City,605.0,213,5,8.0,0.352
+Jubilee,20395.0,6906,6,8.0,0.339
+Victoria,16228.0,5049,8,10.0,0.311
+London Trams,0.0,0,0,0.0,

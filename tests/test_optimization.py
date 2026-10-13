@@ -35,8 +35,19 @@ def test_model1_matches_closed_form():
 
 def test_model1_minimum_frequency_and_service_rule():
     res = run_model("Model 1", obs([10, 10], [3, 0]), CAP,
-                    Settings(target_utilization=1, min_frequency=2, min_only_in_service=True))
+                    Settings(target_utilization=1, min_frequency=2, min_only_in_service=True, zero_train_policy="include"))
     assert list(res.table.optimized_frequency) == [2, 1]   # minimum only where trains are observed
+
+
+def test_zero_train_demand_policy():
+    o = obs([10, 50, 0], [0, 1, 0])  # first observation: passengers but no scheduled train
+    excl = run_model("Model 1", o, CAP, Settings(target_utilization=1))
+    incl = run_model("Model 1", o, CAP, Settings(target_utilization=1, zero_train_policy="include"))
+    assert excl.ok and incl.ok
+    assert "link0" not in set(excl.table.link_id)
+    assert excl.kpis["zero_train_observations"] == 1 and excl.kpis["zero_train_demand"] == pytest.approx(10)
+    assert "link0" in set(incl.table.link_id)
+    assert incl.kpis["total_optimized_allocations"] == excl.kpis["total_optimized_allocations"] + 1
 
 
 def test_model1_infeasible_with_max_frequency():
@@ -129,3 +140,26 @@ def test_result_table_uses_solution_values():
     assert list(t.frequency_change) == [2 - 4, 1 - 1]
     assert np.allclose(t.offered_capacity, 100 * t.optimized_frequency)
     assert all(passed for _, passed, _ in res.checks)
+
+
+@pytest.mark.parametrize("model", ["Model 1", "Model 2", "Model 3"])
+def test_passenger_and_train_quantities_are_whole_numbers(model):
+    # Fractional NUMBAT-style demand, and rho x C = 0.85 x 99 = 84.15 -> 84 whole passengers per train.
+    o = obs([2.85, 84.4, 84.5, 170.2, 333.7, 0.3], [1, 1, 2, 2, 3, 1])
+    res = run_model(model, o, {"L1": 99.0}, Settings(target_utilization=0.85, demand_multiplier=1.1))
+    assert res.ok and all(passed for _, passed, _ in res.checks)
+    t = res.table
+    for col in ["demand", "existing_frequency", "optimized_frequency", "frequency_change", "capacity_per_train",
+                "effective_capacity_per_train", "offered_capacity", "demand_served", "unmet_demand",
+                "capacity_shortfall", "existing_offered_capacity", "existing_shortfall"]:
+        assert pd.api.types.is_integer_dtype(t[col]), col
+    assert list(t.demand) == [3, 93, 93, 187, 367, 0]           # nearest whole passenger after the multiplier
+    assert (t.effective_capacity_per_train == 84).all()
+    assert (t.unmet_demand == t.demand - t.demand_served).all()
+    for key in ["total_demand", "demand_served", "unmet_demand", "offered_effective_capacity"]:
+        assert isinstance(res.kpis[key], int), key
+
+
+def test_fractional_capacity_is_rejected():
+    res = run_model("Model 1", obs([10], [1]), {"L1": 100.5}, Settings())
+    assert not res.ok and "whole number" in res.diagnostics[0]

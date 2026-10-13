@@ -26,8 +26,13 @@ div[data-testid="stMetricValue"] {font-size: 1.45rem;}
 
 # ------------------------------------------------------------------ data
 
+# Bump when preprocessing output changes. st.cache_resource otherwise keeps objects built by older code
+# alive in a running server (this caused a KeyError after the zero-train metrics were added).
+PREPROCESS_VERSION = "2026-10-zero-train"
+
+
 @st.cache_resource(max_entries=2, show_spinner=False)
-def load_and_process(content: bytes, name: str):
+def load_and_process(content: bytes, name: str, _version: str = PREPROCESS_VERSION):
     wb = load_workbook_bytes(content, name)
     proc, error = None, None
     if not wb.errors or wb.loads is not None:
@@ -160,6 +165,14 @@ max_freq = st.sidebar.number_input("Maximum trains per link per 15 min", 1, 60, 
 if max_freq is not None and max_freq < min_freq:
     st.sidebar.error("Minimum frequency exceeds the maximum.")
 
+st.sidebar.header("4. Data policy")
+zt_choice = st.sidebar.radio(
+    "Passengers reported where 0 trains are scheduled",
+    ["Exclude from optimisation (disclosed)", "Include as demand"],
+    help="Link_Loads sometimes shows passengers on a link in an interval where Link_Frequencies shows no train. "
+         "See the Data Quality tab.")
+zero_policy = "exclude" if zt_choice.startswith("Exclude") else "include"
+
 # ------------------------------------------------------------------ layout
 
 st.title("Metro Train Frequency and Capacity Optimization")
@@ -246,6 +259,30 @@ with tabs[1]:
         st.caption("Policy: missing demand is never set to zero; invalid, negative and ambiguous records are "
                    "excluded and reported, not imputed or merged.")
 
+    st.markdown("**Passengers with zero scheduled trains** (consistency check between the two sheets)")
+    if mt.get("zero_train_obs"):
+        z1, z2, z3 = st.columns(3)
+        z1.metric("Link-intervals affected", f"{mt['zero_train_obs']:,}",
+                  delta=f"{100 * mt['zero_train_obs'] / max(mt['eligible_service'], 1):.2f}% of matched", delta_color="off")
+        z2.metric("Passengers involved", fmt(mt["zero_train_demand"]),
+                  delta=f"{mt['zero_train_demand_pct']:.2f}% of demand", delta_color="off")
+        z3.metric("Demand with trains in an adjacent interval", f"{mt['zero_train_adjacent_pct']:.0f}%")
+        zt = data[data["zero_train_demand"]]
+        c_a, c_b = st.columns(2)
+        with c_a:
+            st.dataframe(zt.groupby("line").agg(link_intervals=("demand", "size"), passengers=("demand", "sum"),
+                                                largest=("demand", "max")).sort_values("passengers", ascending=False),
+                         width="stretch")
+        with c_b:
+            st.dataframe(zt.groupby("interval").agg(link_intervals=("demand", "size"), passengers=("demand", "sum"))
+                         .sort_values("passengers", ascending=False).head(12), width="stretch")
+        st.caption("A train cannot carry passengers in an interval where none is scheduled, so these records are "
+                   "inconsistent across the two sheets. They concentrate at the start and end of the traffic day and "
+                   "usually sit next to an interval with trains, which suggests period-boundary assignment in NUMBAT. "
+                   f"Current policy (sidebar): **{zt_choice.lower()}**.")
+    else:
+        st.success("Every link-interval with passengers has at least one scheduled train.")
+
     with st.expander("Detected fields"):
         st.write({"Link_Loads": meta["loads_fields"], "Link_Frequencies": meta["freq_fields"],
                   "time-of-day columns": meta["periods"], "join key": proc.key_fields})
@@ -307,7 +344,9 @@ with tabs[2]:
                 st.markdown(f"**Potentially under-used service:** {len(under):,} link-intervals with trains "
                             "running below 15% of rated capacity")
                 st.dataframe(under.head(50), hide_index=True, width="stretch")
-            st.caption("Derived metrics: they depend on your capacity and utilisation assumptions, not on TfL data.")
+            st.caption("Derived metrics: they depend on your capacity and utilisation assumptions, not on TfL data. "
+                       "Link-intervals with passengers but no scheduled train are data inconsistencies, not capacity "
+                       "mismatches; they appear at zero capacity in the chart and are analysed in the Data Quality tab.")
 
         st.subheader("Network topology (schematic)")
         n_edges = st.slider("Links shown (highest metric first)", 20, 400, 120, step=20)
@@ -333,11 +372,12 @@ FORMULATIONS = {
 
 $$\min \sum_i x_i \quad \text{s.t.} \quad C_i^{\text{eff}} x_i \ge D_i,\;\; l_i \le x_i \le u_i,\;\; \Big[\textstyle\sum_{i\in t} x_i \le F_t\Big]$$
 
-$C_i^{\text{eff}} = \rho\,C_i$. Without a budget the problem separates and the optimum is
+$D_i$ is demand rounded to whole passengers and $C_i^{\text{eff}} = \lfloor \rho\,C_i \rfloor$ (whole passengers,
+rounded down so load never exceeds the target). Without a budget the problem separates and the optimum is
 $x_i = \max(l_i, \lceil D_i / C_i^{\text{eff}} \rceil)$; the solver result is checked against this.
 """,
     "Model 2": r"""
-**Decision variables:** $x_i \in \mathbb{Z}_{\ge 0}$ (train allocations), $y_i \ge 0$ (passengers served).
+**Decision variables:** $x_i \in \mathbb{Z}_{\ge 0}$ (train allocations), $y_i \in \mathbb{Z}_{\ge 0}$ (passengers served).
 
 $$\max \sum_i y_i \quad \text{s.t.}\quad 0 \le y_i \le D_i,\;\; y_i \le C_i^{\text{eff}} x_i,\;\; \sum_{i\in t} x_i \le F_t \;\forall t,\;\; l_i \le x_i \le u_i$$
 
@@ -347,8 +387,8 @@ optimum, so no useless allocations remain. $u_i \le \lceil D_i / C_i^{\text{eff}
 (more trains cannot serve more passengers).
 """,
     "Model 3": r"""
-**Decision variables:** $x_i \in \mathbb{Z}_{\ge 0}$, $y_i \in [0, D_i]$ with $y_i \le C_i x_i$ (rated capacity is the hard limit),
-and non-negative deviation variables.
+**Decision variables:** $x_i \in \mathbb{Z}_{\ge 0}$, $y_i \in \{0,\dots,D_i\}$ with $y_i \le C_i x_i$ (rated capacity is the hard limit),
+and non-negative integer deviation variables (differences of whole trains or whole passengers).
 
 | Goal | Goal constraint | Normalised deviation $z_k$ |
 |---|---|---|
@@ -398,7 +438,7 @@ with tabs[3]:
 
     settings = Settings(target_utilization=rho, min_frequency=int(min_freq), max_frequency=max_freq,
                         min_only_in_service=min_only, use_budget=use_budget, budget_factor=budget_pct / 100,
-                        weights=weights, time_limit=float(time_limit))
+                        weights=weights, time_limit=float(time_limit), zero_train_policy=zero_policy)
     problems = settings.validate()
     model_ready, ready_msg = ready[model]
     if not model_ready:
@@ -441,7 +481,7 @@ with tabs[3]:
                 f"max {s.max_frequency if s.max_frequency is not None else 'none (technical bound only)'}; "
                 f"budget {f'{s.budget_factor:.0%} of observed allocations per interval' if (s.use_budget or res.model == 'Model 2') else 'not enforced'}"
                 + (f"; weights {', '.join(f'{k} {v:g}' for k, v in s.weights.items())}" if res.model == "Model 3" else "")
-                + f"; demand multiplier {s.demand_multiplier:g}.")
+                + f"; demand multiplier {s.demand_multiplier:g}; zero-train demand: {s.zero_train_policy}d.")
         if not res.ok:
             st.error(f"**{res.status}.** No result is shown because there is no valid solution.")
             for d in res.diagnostics:
@@ -469,6 +509,13 @@ with tabs[3]:
                          help="Links where demand exceeds C x ρ x trains in at least one interval")
             r2[3].metric("Links with more / less service", f"{k['links_more_service']} / {k['links_less_service']}")
 
+            if k.get("zero_train_observations"):
+                if k["zero_train_policy"] == "exclude":
+                    st.info(f"{k['zero_train_observations']:,} link-intervals with passengers but 0 scheduled trains "
+                            f"({k['zero_train_demand']:,.0f} passengers) were excluded from this run.")
+                else:
+                    st.info(f"{k['zero_train_observations']:,} link-intervals with passengers but 0 scheduled trains "
+                            "are included, so the plan may add service where the timetable has none.")
             st.markdown("**Interpretation** (generated from the computed results)")
             for line in an.interpret(res):
                 st.markdown(f"- {line}")

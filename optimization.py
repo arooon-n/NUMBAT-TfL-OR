@@ -48,6 +48,7 @@ class Settings:
     use_budget: bool = False                  # Model 1 / Model 3: optional; Model 2: always on
     budget_factor: float = 1.0                # F_t = floor(beta * observed allocations in t)
     demand_multiplier: float = 1.0            # scenario multiplier on D_i
+    zero_train_policy: str = "exclude"        # demand where 0 trains are observed: "exclude" or "include"
     weights: dict = field(default_factory=lambda: {g: 1.0 for g in GOALS})
     time_limit: float = 120.0
     mip_gap: float = 1e-4
@@ -64,6 +65,8 @@ class Settings:
             errors.append("The allocation budget must be a positive percentage of the observed baseline.")
         if self.demand_multiplier < 0:
             errors.append("Demand multiplier cannot be negative.")
+        if self.zero_train_policy not in ("exclude", "include"):
+            errors.append("Unknown policy for demand on link-intervals with zero observed trains.")
         if any(w < 0 for w in self.weights.values()):
             errors.append("Goal weights cannot be negative.")
         return errors
@@ -90,24 +93,46 @@ class Result:
 def prepare(obs: pd.DataFrame, capacity: dict[str, float], s: Settings, need_frequency: bool) -> pd.DataFrame:
     """Attach demand, capacity and bounds to each eligible link-interval observation."""
     mask = obs["eligible_service"] if need_frequency else obs["eligible_demand"]
+    # Passengers reported where the timetable has 0 trains contradict the frequency sheet (first-review concern).
+    # Default: exclude them from optimisation and disclose how much demand that removes.
+    zero = mask & (obs["frequency"] == 0) & (obs["demand"] > 0)
+    if s.zero_train_policy == "exclude":
+        mask = mask & ~zero
     w = obs.loc[mask].copy()
+    w.attrs["zero_train"] = {"policy": s.zero_train_policy, "observations": int(zero.sum()),
+                             "demand": int(whole_passengers(obs.loc[zero, "demand"], s.demand_multiplier).sum())}
     missing = sorted(set(w["line"]) - {k for k, v in capacity.items() if v and v > 0})
     if missing:
         raise ValueError(f"No positive passenger capacity configured for line(s): {missing}.")
-    w["D"] = w["demand"].astype(float) * s.demand_multiplier
-    w["C"] = w["line"].map(capacity).astype(float)
-    w["C_eff"] = w["C"] * s.target_utilization
+    cap = w["line"].map(capacity).astype(float)
+    fractional = sorted(set(w.loc[cap % 1 != 0, "line"]))
+    if fractional:
+        raise ValueError(f"Passenger capacity per train must be a whole number of passengers for line(s): {fractional}.")
+    # Passengers and trains are whole units. NUMBAT link loads are modelled estimates with fractional values,
+    # so demand is rounded to the nearest whole passenger after the scenario multiplier.
+    w["D"] = whole_passengers(w["demand"], s.demand_multiplier)
+    w["C"] = cap.astype(np.int64)
+    # Rounded down: a train cannot carry part of a passenger, and rounding up would exceed the target utilisation.
+    w["C_eff"] = np.floor(w["C"] * s.target_utilization + 1e-9).astype(np.int64)
+    too_small = sorted(set(w.loc[w["C_eff"] < 1, "line"]))
+    if too_small:
+        raise ValueError(f"Effective capacity rho x C is below one passenger per train for line(s): {too_small}.")
     w["f_obs"] = w["frequency"].astype(float)
     in_service = w["f_obs"].fillna(1) > 0 if s.min_only_in_service else True
-    w["lb"] = np.where(in_service, s.min_frequency, 0).astype(int)
+    w["lb"] = np.where(in_service, s.min_frequency, 0).astype(np.int64)
     w["ub_user"] = np.inf if s.max_frequency is None else float(s.max_frequency)
-    w["need"] = np.maximum(w["lb"], np.ceil(w["D"] / w["C_eff"] - 1e-9)).astype(int)
+    w["need"] = np.maximum(w["lb"], -(-w["D"] // w["C_eff"])).astype(np.int64)  # exact integer ceil(D / C_eff)
     return w.reset_index(drop=True)
+
+
+def whole_passengers(demand: pd.Series, multiplier: float = 1.0) -> pd.Series:
+    """Demand in whole passengers: nearest integer (halves round up) after the scenario multiplier."""
+    return np.floor(demand.astype(float) * multiplier + 0.5 + 1e-9).astype(np.int64)
 
 
 def interval_budgets(w: pd.DataFrame, factor: float) -> pd.Series:
     """F_t = floor(beta * sum of observed link frequencies in interval t)."""
-    return np.floor(w.groupby("interval")["f_obs"].sum() * factor + 1e-9).astype(int)
+    return np.floor(w.groupby("interval")["f_obs"].sum() * factor + 1e-9).astype(np.int64)
 
 
 def _budget_diagnostics(w: pd.DataFrame, budgets: pd.Series, column: str, what: str) -> list[str]:
@@ -226,18 +251,18 @@ def model2(obs: pd.DataFrame, capacity: dict, s: Settings) -> Result:
     budgets = interval_budgets(w, s.budget_factor)
     diag = _budget_diagnostics(w, budgets, "lb", "sum of minimum frequencies")
     D, Ce = w["D"].to_numpy(), w["C_eff"].to_numpy()
-    tech_ub = np.ceil(D / Ce - 1e-9)  # more trains than this cannot carry more passengers
+    tech_ub = -(-D // Ce)  # more trains than ceil(D / C_eff) cannot carry more passengers
     m = _base_model(w, _x_bounds(w, tech_ub), budgets)
-    m.y = pyo.Var(m.I, within=pyo.NonNegativeReals, bounds=lambda _, i: (0, D[i]))
+    m.y = pyo.Var(m.I, within=pyo.NonNegativeIntegers, bounds=lambda _, i: (0, int(D[i])))
     m.served_cap = pyo.Constraint(m.I, rule=lambda m, i: m.y[i] <= Ce[i] * m.x[i])
     m.obj = pyo.Objective(expr=sum(m.y[i] for i in m.I), sense=pyo.maximize)
     sol1 = _solve(m, s)
     if not sol1["has_solution"]:
         return Result("Model 2", False, sol1["text"], diagnostics=diag or ["The solver found no solution satisfying every constraint."], settings=s)
-    best = sum(_values(m.y, len(w)))
-    # Stage 2: keep (essentially) the same served demand, use as few allocations as possible.
+    best = int(round(sum(_values(m.y, len(w)))))
+    # Stage 2: keep the same served demand (whole passengers, so exactly), use as few allocations as possible.
     m.obj.deactivate()
-    m.keep_served = pyo.Constraint(expr=sum(m.y[i] for i in m.I) >= best - max(1e-6 * best, 1e-6))
+    m.keep_served = pyo.Constraint(expr=sum(m.y[i] for i in m.I) >= best)
     m.obj2 = pyo.Objective(expr=sum(m.x[i] for i in m.I), sense=pyo.minimize)
     sol2 = _solve(m, s)
     if not sol2["has_solution"]:  # fall back to stage-1 solution is impossible after re-solve; report honestly
@@ -266,9 +291,13 @@ def model3(obs: pd.DataFrame, capacity: dict, s: Settings) -> Result:
     budgets = interval_budgets(w, s.budget_factor) if s.use_budget else None
     diag = _budget_diagnostics(w, budgets, "lb", "sum of minimum frequencies") if budgets is not None else []
     D, C, Ce, f = (w[c].to_numpy() for c in ["D", "C", "C_eff", "f_obs"])
-    tech_ub = np.maximum.reduce([np.ceil(D / Ce - 1e-9), f, w["lb"].to_numpy()])  # beyond this every goal worsens
+    tech_ub = np.maximum.reduce([-(-D // Ce), f, w["lb"].to_numpy()])  # beyond this every goal worsens
     m = _base_model(w, _x_bounds(w, tech_ub), budgets)
-    m.y = pyo.Var(m.I, within=pyo.NonNegativeReals, bounds=lambda _, i: (0, D[i]))
+    # y and the deviations are implied integers, so they are not declared integer (declaring ~5 x |I| extra integer
+    # variables makes the whole network intractable for no gain): x, D, f, C and C_eff are whole numbers and every
+    # one of these variables has a positive cost, so for any integer x the best y_i = min(D_i, C_i x_i) and each
+    # deviation is a difference of whole trains or passengers. y is set to that value after solving.
+    m.y = pyo.Var(m.I, within=pyo.NonNegativeReals, bounds=lambda _, i: (0, int(D[i])))
     m.p3 = pyo.Var(m.I, within=pyo.NonNegativeReals)
     m.n3 = pyo.Var(m.I, within=pyo.NonNegativeReals)
     m.p4 = pyo.Var(m.I, within=pyo.NonNegativeReals)
@@ -276,9 +305,9 @@ def model3(obs: pd.DataFrame, capacity: dict, s: Settings) -> Result:
     m.served_cap = pyo.Constraint(m.I, rule=lambda m, i: m.y[i] <= C[i] * m.x[i])
     m.freq_goal = pyo.Constraint(m.I, rule=lambda m, i: m.x[i] - f[i] == m.p3[i] - m.n3[i])
     m.util_goal = pyo.Constraint(m.I, rule=lambda m, i: D[i] - Ce[i] * m.x[i] == m.p4[i] - m.n4[i])
-    E = max(float(w["need"].sum()), 1.0)
+    E = max(int(w["need"].sum()), 1)
     F0 = max(f.sum(), 1.0)
-    D0 = max(D.sum(), 1.0)
+    D0 = max(int(D.sum()), 1)
     wt = s.weights
     m.p1 = pyo.Var(within=pyo.NonNegativeReals)
     m.n1 = pyo.Var(within=pyo.NonNegativeReals)
@@ -298,7 +327,7 @@ def model3(obs: pd.DataFrame, capacity: dict, s: Settings) -> Result:
     if not sol["has_solution"]:
         return Result("Model 3", False, sol["text"], diagnostics=diag or ["The solver found no solution satisfying every constraint."], settings=s)
     x = np.round(_values(m.x, len(w)))
-    y = np.minimum(_values(m.y, len(w)), np.minimum(D, C * x))
+    y = np.minimum(D, C * x)  # best whole-passenger service for x (also exact if the solver stopped early)
     res = _finish("Model 3", w, x, y, budgets, sol, s, diag)
     def goal_values(alloc, served):  # the normalised deviations z_k for any allocation
         return {"efficiency": max(alloc.sum() - E, 0) / E, "demand": (D - served).sum() / D0,
@@ -331,9 +360,19 @@ def run_model(name: str, obs: pd.DataFrame, capacity: dict, s: Settings) -> Resu
 
 # ---------------------------------------------------------------- results
 
+def _counts(a: np.ndarray) -> np.ndarray:
+    """Whole-number column (trains or passengers) as int64. Columns with missing values (observed frequency
+    unknown, Model 1 only) or fractional observed data stay float, so NaN never becomes pandas' pd.NA."""
+    a = np.asarray(a, dtype=float)
+    return a.astype(np.int64) if not np.isnan(a).any() and np.all(a % 1 == 0) else a
+
+
 def _finish(name, w, x, y, budgets, sol, s: Settings, diag) -> Result:
-    D, C, Ce = w["D"].to_numpy(), w["C"].to_numpy(), w["C_eff"].to_numpy()
+    D, C, Ce = (w[c].to_numpy(dtype=np.int64) for c in ["D", "C", "C_eff"])
     f = w["f_obs"].to_numpy(dtype=float)
+    checks = validate(name, w, x, y, budgets)  # on the raw solver values, before rounding
+    ok = all(c[1] for c in checks)
+    x, y = np.round(x).astype(np.int64), np.round(y).astype(np.int64)
     offered = Ce * x
     with np.errstate(divide="ignore", invalid="ignore"):
         util = np.where(C * x > 0, y / (C * x), np.nan)
@@ -342,28 +381,34 @@ def _finish(name, w, x, y, budgets, sol, s: Settings, diag) -> Result:
         "link_id": w["link_id"], "line": w["line"], "direction": w.get("direction"),
         "from_station": w["from_station"], "to_station": w["to_station"],
         "interval": w["interval"], "interval_order": w["interval_order"],
-        "demand": D, "existing_frequency": f, "optimized_frequency": x.astype(int),
-        "frequency_change": x - f,
+        "demand": D, "existing_frequency": _counts(f), "optimized_frequency": x,
+        "frequency_change": _counts(x - f),
         "capacity_per_train": C, "effective_capacity_per_train": Ce,
-        "offered_capacity": offered, "demand_served": y, "unmet_demand": np.maximum(D - y, 0),
+        "offered_capacity": offered, "demand_served": y, "unmet_demand": D - y,
         "capacity_shortfall": np.maximum(D - offered, 0),
         "utilization": util,
-        "existing_offered_capacity": Ce * f,
-        "existing_shortfall": np.where(np.isnan(f), np.nan, np.maximum(D - Ce * f, 0)),
+        "existing_offered_capacity": _counts(Ce * f),
+        "existing_shortfall": _counts(np.where(np.isnan(f), np.nan, np.maximum(D - Ce * f, 0))),
         "existing_utilization": util_obs,
     })
     table["link_label"] = w["link_label"]
-    checks = validate(name, w, x, y, budgets)
-    ok = all(c[1] for c in checks)
     budget_table = pd.DataFrame()
     if budgets is not None:
         used = table.groupby("interval")["optimized_frequency"].sum()
-        budget_table = pd.DataFrame({"budget": budgets, "allocated": used.reindex(budgets.index).fillna(0).astype(int)})
+        budget_table = pd.DataFrame({"budget": budgets, "allocated": used.reindex(budgets.index).fillna(0).astype(np.int64)})
         budget_table["observed"] = table.groupby("interval")["existing_frequency"].sum().reindex(budgets.index)
-        budget_table["binding"] = budget_table["allocated"] >= budget_table["budget"]
+        budget_table["unmet_demand"] = table.groupby("interval")["unmet_demand"].sum().reindex(budgets.index)
+        # Binding = the budget is exhausted AND demand is left unmet, i.e. the constraint actually limits service
+        # (a zero budget in an interval with no demand is at equality but restricts nothing).
+        budget_table["binding"] = (budget_table["allocated"] >= budget_table["budget"]) & (budget_table["unmet_demand"] > 1e-6)
         budget_table = budget_table.reset_index().rename(columns={"index": "interval"})
     status = sol["text"] if ok else "Solution failed validation"
-    return Result(name, ok, status, table, kpis(table, budget_table), budget_table, checks=checks,
+    k = kpis(table, budget_table)
+    zt = w.attrs.get("zero_train", {})
+    k["zero_train_policy"] = zt.get("policy")
+    k["zero_train_observations"] = zt.get("observations", 0)
+    k["zero_train_demand"] = zt.get("demand", 0.0)
+    return Result(name, ok, status, table, k, budget_table, checks=checks,
                   diagnostics=diag, settings=s, proven_optimal=sol["optimal"], gap=sol["gap"])
 
 
@@ -379,6 +424,7 @@ def validate(name, w, x, y, budgets) -> list[tuple[str, bool, str]]:
     add("Train allocations are non-negative integers", (x >= 0) & (np.abs(x - np.round(x)) < TOL))
     add("Minimum frequency respected", x >= lb - TOL)
     add("Maximum frequency respected", x <= ub + TOL)
+    add("Served demand is in whole passengers", (y >= -TOL) & (np.abs(y - np.round(y)) < TOL))
     add("Served demand does not exceed demand", y <= D + 1e-6 * np.maximum(D, 1))
     cap = Ce if name != "Model 3" else C
     add("Served demand does not exceed offered capacity", y <= cap * x + 1e-6 * np.maximum(D, 1))
@@ -395,17 +441,18 @@ def kpis(t: pd.DataFrame, budget: pd.DataFrame | None = None) -> dict:
     served = t["demand_served"].sum()
     rated_offered = (t["capacity_per_train"] * t["optimized_frequency"]).sum()
     existing = t["existing_frequency"].sum(min_count=1)
+    count = lambda v: int(v) if float(v) % 1 == 0 else float(v)  # whole trains / passengers as int
     out = {
         "observations": len(t),
         "links": t["link_id"].nunique(),
-        "total_demand": demand,
+        "total_demand": int(demand),
         "total_optimized_allocations": int(t["optimized_frequency"].sum()),
-        "total_existing_allocations": None if pd.isna(existing) else float(existing),
-        "allocation_change": None if pd.isna(existing) else float(t["optimized_frequency"].sum() - existing),
-        "demand_served": served,
+        "total_existing_allocations": None if pd.isna(existing) else count(existing),
+        "allocation_change": None if pd.isna(existing) else count(t["optimized_frequency"].sum() - existing),
+        "demand_served": int(served),
         "satisfaction_pct": 100 * served / demand if demand else 100.0,
-        "unmet_demand": t["unmet_demand"].sum(),
-        "offered_effective_capacity": t["offered_capacity"].sum(),
+        "unmet_demand": int(t["unmet_demand"].sum()),
+        "offered_effective_capacity": int(t["offered_capacity"].sum()),
         "avg_utilization_pct": 100 * served / rated_offered if rated_offered else None,
         "observations_with_shortfall": int((t["capacity_shortfall"] > 1e-6).sum()),
         "links_with_shortfall": int(t.loc[t["capacity_shortfall"] > 1e-6, "link_id"].nunique()),

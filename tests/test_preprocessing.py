@@ -53,6 +53,18 @@ def test_duplicates_and_unmatched_links(intervals):
     assert p.data[p.data.link_id == "A>B"].eligible_service.all()
 
 
+def test_zero_train_demand_is_flagged(intervals):
+    loads = [link_row("A>B", "L1", "NB", 1, "A", "B", [5, 20, 0, 3])]
+    freqs = [link_row("A>B", "L1", "NB", 1, "A", "B", [0, 2, 0, 0])]
+    p = process(loads, freqs, intervals)
+    d = p.data.set_index("interval")
+    assert d.loc["0500-0515", "zero_train_demand"] and d.loc["0500-0515", "zero_train_adjacent_service"]
+    assert not d.loc["2345-0000", "zero_train_demand"]          # no passengers, no trains: consistent
+    assert d.loc["0000-0015", "zero_train_demand"] and not d.loc["0000-0015", "zero_train_adjacent_service"]
+    assert p.metrics["zero_train_obs"] == 2 and p.metrics["zero_train_demand"] == 8
+    assert d.loc["0500-0515", "demand"] == 5                    # observation kept, only flagged
+
+
 def test_readiness_without_frequencies(intervals):
     loads = [link_row("A>B", "L1", "NB", 1, "A", "B", [1, 2, 3, 4])]
     p = preprocess(load_workbook_bytes(make_workbook(loads, [], intervals, include_freq=False)))

@@ -65,6 +65,12 @@ in that interval) feed the models. Station sheets are not substitutes for link l
 - **Supplied workbook (NBT25TWT)**: 1,214 links, 19 lines, 482 stations, 96 intervals, with no missing or invalid values.
   2 links are excluded because the sheets disagree (`Liverpool Street` vs `Hackney Downs` as one link's destination, and
   a different `To NLC`). That leaves 99.8% of the 116,544 link-intervals eligible.
+- **Passengers with zero scheduled trains** (first-review concern): 5,770 link-intervals (0.41% of demand) report
+  passengers where `Link_Frequencies` shows no train. They cluster at the start and end of the traffic day, and for 85%
+  of that demand the link has trains in an adjacent interval, which points to a period-boundary effect. They are
+  flagged in the Data Quality tab. A sidebar policy either **excludes** them from optimisation (the default; the removed
+  demand is shown with every result) or **includes** them. Including them makes Model 1 add about 5,760 trains in
+  quarter-hours where the timetable runs none.
 
 Readiness is shown per model. Model 1 needs only demand. Models 2 and 3 need matched observed frequency for the budget
 and frequency targets.
@@ -117,7 +123,7 @@ Sources:
 ## The three models
 
 Index $i$ = one (link, 15-minute interval) observation; $t$ = interval. $D_i$ is observed demand, $f_i$ is observed
-trains, $x_i \in \mathbb{Z}_{\ge0}$ is train allocations, and $y_i \ge 0$ is passengers served.
+trains, $x_i \in \mathbb{Z}_{\ge0}$ is train allocations, and $y_i \in \mathbb{Z}_{\ge0}$ is passengers served. Demand $D_i$ is rounded to whole passengers (NUMBAT loads are fractional modelled estimates) and $C_i^{\text{eff}}=\lfloor\rho C_i\rfloor$.
 
 ### Model 1 — Minimum train frequency (integer programming)
 
